@@ -1,0 +1,111 @@
+{
+  "name": "v-enc",
+  "displayName": "V.enc",
+  "description": "",
+  "version": "1.1.0",
+  "engines": {
+    "vscode": "^1.120.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onFileSystem:venc",
+    "onCommand:v-enc.setPassword",
+    "onCommand:v-enc.openWorkspace",
+    "onCommand:v-enc.changePassword"
+  ],
+  "publisher": "Abstergo",
+  "icon": "icon.png",
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "v-enc.setPassword",
+        "title": "V.enc: Set/Change Password for Directory"
+      },
+      {
+        "command": "v-enc.openWorkspace",
+        "title": "V.enc: Reopen Workspace in Secure Mode"
+      },
+      {
+        "command": "v-enc.changePassword",
+        "title": "V.enc: Change Password & Re-encrypt Files"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "v-enc.setPassword",
+          "when": "true"
+        },
+        {
+          "command": "v-enc.openWorkspace",
+          "when": "workspaceFile || workspaceFolderCount > 0"
+        },
+        {
+          "command": "v-enc.changePassword",
+          "when": "true"
+        }
+      ]
+    },
+    "languages": [
+      {
+        "id": "venc",
+        "aliases": [
+          "V.enc Encrypted File",
+          "venc"
+        ],
+        "extensions": [
+          ".venc"
+        ],
+        "icon": {
+          "light": "./resources/venc-icon.png",
+          "dark": "./resources/venc-icon.png"
+        }
+      }
+    ],
+    "configuration": {
+      "title": "V.enc Settings",
+      "properties": {
+        "v-enc.encryptionMode": {
+          "type": "string",
+          "enum": [
+            "password",
+            "sshKey"
+          ],
+          "default": "password",
+          "description": "Encryption mode to use for .venc files. 'password' uses symmetric directory password; 'sshKey' uses asymmetric SSH key pair."
+        },
+        "v-enc.sshPublicKeyPath": {
+          "type": "string",
+          "default": "~/.ssh/id_rsa.pub",
+          "description": "Path to the SSH public key (used for encrypting)."
+        },
+        "v-enc.sshPrivateKeyPath": {
+          "type": "string",
+          "default": "~/.ssh/id_rsa",
+          "description": "Path to the SSH private key (used for decrypting)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.120.0",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "22.x",
+    "typescript-eslint": "^8.56.1",
+    "eslint": "^9.39.3",
+    "typescript": "^5.9.3",
+    "@vscode/test-cli": "^0.0.12",
+    "@vscode/test-electron": "^2.5.2"
+  }
+}
