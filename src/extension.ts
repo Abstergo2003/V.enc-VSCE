@@ -34,7 +34,10 @@ function getPublicKey(publicKeyPath: string): crypto.KeyObject {
     if (!fs.existsSync(expandedPath)) {
         throw new Error(`SSH public key file not found at: ${expandedPath}`);
     }
-    const publicKeyStr = fs.readFileSync(expandedPath, 'utf8');
+    const publicKeyStr = fs.readFileSync(expandedPath, 'utf8').trim();
+    if (publicKeyStr.startsWith('-----BEGIN')) {
+        return crypto.createPublicKey(publicKeyStr);
+    }
     const jwk = parseSshRsaToJwk(publicKeyStr);
     return crypto.createPublicKey({
         key: jwk,
@@ -451,6 +454,36 @@ async function redirectIfNeeded(editor: vscode.TextEditor | undefined) {
     }
 }
 
+async function encryptAndRedirectOnSave(document: vscode.TextDocument) {
+    if (isRedirecting) {
+        return;
+    }
+    const uri = document.uri;
+    if (uri.scheme === 'file' && uri.path.toLowerCase().endsWith('.venc')) {
+        isRedirecting = true;
+        try {
+            const vencUri = uri.with({ scheme: 'venc' });
+            const text = document.getText();
+            
+            // Write to venc:// which will encrypt and write to file://
+            await vscode.workspace.fs.writeFile(vencUri, Buffer.from(text, 'utf8'));
+            
+            // Close the current file:// editor
+            await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+            
+            // Open the venc:// editor
+            const doc = await vscode.workspace.openTextDocument(vencUri);
+            await vscode.window.showTextDocument(doc, {
+                preview: false
+            });
+        } catch (err: any) {
+            vscode.window.showErrorMessage(`Failed to secure V.enc file: ${err.message || err}`);
+        } finally {
+            isRedirecting = false;
+        }
+    }
+}
+
 export function activate(context: vscode.ExtensionContext) {
     console.log('V.enc extension is now active!');
 
@@ -669,6 +702,21 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.window.onDidChangeActiveTextEditor(editor => {
             redirectIfNeeded(editor);
             updateStatusBar();
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.workspace.onDidOpenTextDocument(document => {
+            const editor = vscode.window.activeTextEditor;
+            if (editor && editor.document === document) {
+                redirectIfNeeded(editor);
+            }
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.workspace.onDidSaveTextDocument(document => {
+            encryptAndRedirectOnSave(document);
         })
     );
 

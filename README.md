@@ -30,6 +30,27 @@ V.enc adds the following settings to VS Code:
 - **`v-enc.sshPublicKeyPath`**: Path to the SSH public key file (defaults to `~/.ssh/id_rsa.pub`). Supports standard `ssh-rsa` public keys or PEM public keys.
 - **`v-enc.sshPrivateKeyPath`**: Path to the SSH private key file (defaults to `~/.ssh/id_rsa`). Supports passphrase-protected private keys.
 
+### 🔑 Configuring SSH Keys
+
+To configure the SSH key options, open your VS Code settings (`Ctrl+,` or `Cmd+,`) or edit your `settings.json` file:
+
+#### 1. Path Formatting & Tilde Expansion
+The settings support two types of path formatting:
+- **Tilde Expansion (`~`)**: The tilde `~` symbol automatically resolves to your system user profile/home directory. This is the most portable format.
+  * Public Key Default: `~/.ssh/id_rsa.pub` (resolves to `/Users/username/.ssh/id_rsa.pub` on macOS/Linux or `C:\Users\username\.ssh\id_rsa.pub` on Windows)
+  * Private Key Default: `~/.ssh/id_rsa`
+- **Absolute Paths**: You can specify absolute paths. On Windows, use forward slashes `/` or escaped backslashes `\\` to avoid syntax errors:
+  * Example (Forward Slashes): `C:/Users/YourUsername/.ssh/id_rsa`
+  * Example (Backslashes): `C:\\Users\\YourUsername\\.ssh\\id_rsa`
+
+#### 2. Key Format Compatibility
+- **Public Key**: Supports standard OpenSSH public key format (e.g. starting with `ssh-rsa AAAAB3...`) and standard PEM public keys (starting with `-----BEGIN PUBLIC KEY-----`).
+- **Private Key**: Supports standard PEM-encoded private keys (including OpenSSH private key formats starting with `-----BEGIN OPENSSH PRIVATE KEY-----` or PKCS#1/PKCS#8).
+- **Passphrase-Protected Keys**: If your private key requires a passphrase, V.enc displays a secure input field in the VS Code command palette. The passphrase is cached in-memory during the active VS Code session and is never saved to disk.
+
+#### 3. Settings Sync & Privacy
+Both SSH key path settings are defined with `machine-overridable` scope. This guarantees that **VS Code's Settings Sync will not sync these paths to the cloud**, keeping your local usernames and key paths private to each physical machine.
+
 ---
 
 ## 🛠️ Commands

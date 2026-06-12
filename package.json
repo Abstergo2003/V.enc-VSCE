@@ -2,7 +2,7 @@
   "name": "v-enc",
   "displayName": "V.enc",
   "description": "",
-  "version": "1.1.0",
+  "version": "1.2.1",
   "engines": {
     "vscode": "^1.120.0"
   },
@@ -13,7 +13,9 @@
     "onFileSystem:venc",
     "onCommand:v-enc.setPassword",
     "onCommand:v-enc.openWorkspace",
-    "onCommand:v-enc.changePassword"
+    "onCommand:v-enc.changePassword",
+    "onLanguage:venc",
+    "workspaceContains:**/*.venc"
   ],
   "publisher": "Abstergo",
   "icon": "icon.png",
@@ -79,13 +81,15 @@
         },
         "v-enc.sshPublicKeyPath": {
           "type": "string",
+          "scope": "machine-overridable",
           "default": "~/.ssh/id_rsa.pub",
-          "description": "Path to the SSH public key (used for encrypting)."
+          "description": "Path to the SSH public key (used for encrypting). The tilde symbol '~' will automatically expand to your home directory (e.g., 'C:\\Users\\<Username>\\.ssh\\id_rsa.pub' on Windows or '/home/<username>/.ssh/id_rsa.pub' on Linux/macOS)."
         },
         "v-enc.sshPrivateKeyPath": {
           "type": "string",
+          "scope": "machine-overridable",
           "default": "~/.ssh/id_rsa",
-          "description": "Path to the SSH private key (used for decrypting)."
+          "description": "Path to the SSH private key (used for decrypting). The tilde symbol '~' will automatically expand to your home directory (e.g., 'C:\\Users\\<Username>\\.ssh\\id_rsa' on Windows or '/home/<username>/.ssh/id_rsa' on Linux/macOS)."
         }
       }
     }
