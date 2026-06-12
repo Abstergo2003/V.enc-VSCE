@@ -30,6 +30,25 @@ V.enc adds the following settings to VS Code:
 - **`v-enc.sshPublicKeyPath`**: Path to the SSH public key file (defaults to `~/.ssh/id_rsa.pub`). Supports standard `ssh-rsa` public keys or PEM public keys.
 - **`v-enc.sshPrivateKeyPath`**: Path to the SSH private key file (defaults to `~/.ssh/id_rsa`). Supports passphrase-protected private keys.
 
+### 🔑 How to Generate Compatible SSH Keys
+
+Since V.enc uses hybrid envelope encryption, it **requires RSA keys**. Other key types such as Ed25519 or ECDSA do not support encryption/decryption (they are for signing only) and cannot be used.
+
+To generate a compatible RSA key pair, run the following command in your terminal:
+
+```bash
+# Generate a 4096-bit RSA key pair
+ssh-keygen -t rsa -b 4096 -f ~/.ssh/venc
+```
+
+During generation, you can decide whether to add a passphrase:
+- **With a Passphrase (Recommended)**: V.enc will securely prompt you for the passphrase the first time you open a `.venc` file during a session, and cache it in-memory.
+- **Without a Passphrase (Silent Mode)**: Press Enter to leave the passphrase empty. V.enc will load your private key completely silently on startup, opening your secure files immediately without any prompts.
+
+This command generates two files:
+1. **Public Key**: `~/.ssh/venc.pub` (configure in `v-enc.sshPublicKeyPath`)
+2. **Private Key**: `~/.ssh/venc` (configure in `v-enc.sshPrivateKeyPath`)
+
 ### 🔑 Configuring SSH Keys
 
 To configure the SSH key options, open your VS Code settings (`Ctrl+,` or `Cmd+,`) or edit your `settings.json` file:

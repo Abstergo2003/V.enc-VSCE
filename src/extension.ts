@@ -16,11 +16,13 @@ import {
 // In-memory password store: directoryKey -> password
 const passwordMap = new Map<string, string>();
 const pendingPasswordPrompts = new Map<string, Promise<string | undefined>>();
+const decryptedSizes = new Map<string, number>();
 
 let statusBarItem: vscode.StatusBarItem;
 let vencFileSystemProvider: VEncFileSystemProvider | undefined;
 
 let cachedPrivateKey: crypto.KeyObject | undefined;
+let pendingPrivateKeyPrompt: Promise<crypto.KeyObject | undefined> | undefined;
 
 function expandHomeDir(pathStr: string): string {
     if (pathStr.startsWith('~')) {
@@ -50,49 +52,61 @@ async function getPrivateKey(privateKeyPath: string): Promise<crypto.KeyObject |
         return cachedPrivateKey;
     }
     
-    const expandedPath = expandHomeDir(privateKeyPath);
-    if (!fs.existsSync(expandedPath)) {
-        throw new Error(`SSH private key file not found at: ${expandedPath}`);
+    if (pendingPrivateKeyPrompt) {
+        return pendingPrivateKeyPrompt;
     }
     
-    const privateKeyPem = fs.readFileSync(expandedPath, 'utf8');
-    
-    // Try to load without passphrase first
-    try {
-        const key = crypto.createPrivateKey(privateKeyPem);
-        cachedPrivateKey = key;
-        return key;
-    } catch (err: any) {
-        // If it requires a passphrase, prompt the user
-        const isPassphraseRequired = 
-            err.message.includes('passphrase') || 
-            err.message.includes('password') || 
-            err.message.includes('key val') || 
-            err.message.includes('DECODER') ||
-            err.message.includes('Unsupported state');
-            
-        if (isPassphraseRequired) {
-            const passphrase = await vscode.window.showInputBox({
-                prompt: `Enter passphrase for SSH private key: ${expandedPath}`,
-                password: true,
-                ignoreFocusOut: true
-            });
-            if (!passphrase) {
-                return undefined;
-            }
-            try {
-                const key = crypto.createPrivateKey({
-                    key: privateKeyPem,
-                    passphrase: passphrase
-                });
-                cachedPrivateKey = key;
-                return key;
-            } catch (innerErr: any) {
-                throw new Error(`Invalid passphrase for SSH private key: ${innerErr.message}`);
-            }
-        } else {
-            throw err;
+    pendingPrivateKeyPrompt = (async () => {
+        const expandedPath = expandHomeDir(privateKeyPath);
+        if (!fs.existsSync(expandedPath)) {
+            throw new Error(`SSH private key file not found at: ${expandedPath}`);
         }
+        
+        const privateKeyPem = fs.readFileSync(expandedPath, 'utf8');
+        
+        // Try to load without passphrase first
+        try {
+            const key = crypto.createPrivateKey(privateKeyPem);
+            cachedPrivateKey = key;
+            return key;
+        } catch (err: any) {
+            // If it requires a passphrase, prompt the user
+            const isPassphraseRequired = 
+                err.message.includes('passphrase') || 
+                err.message.includes('password') || 
+                err.message.includes('key val') || 
+                err.message.includes('DECODER') ||
+                err.message.includes('Unsupported state');
+                
+            if (isPassphraseRequired) {
+                const passphrase = await vscode.window.showInputBox({
+                    prompt: `Enter passphrase for SSH private key: ${expandedPath}`,
+                    password: true,
+                    ignoreFocusOut: true
+                });
+                if (!passphrase) {
+                    return undefined;
+                }
+                try {
+                    const key = crypto.createPrivateKey({
+                        key: privateKeyPem,
+                        passphrase: passphrase
+                    });
+                    cachedPrivateKey = key;
+                    return key;
+                } catch (innerErr: any) {
+                    throw new Error(`Invalid passphrase for SSH private key: ${innerErr.message}`);
+                }
+            } else {
+                throw err;
+            }
+        }
+    })();
+    
+    try {
+        return await pendingPrivateKeyPrompt;
+    } finally {
+        pendingPrivateKeyPrompt = undefined;
     }
 }
 
@@ -189,6 +203,21 @@ function updateStatusBar() {
     if (!statusBarItem) {
         return;
     }
+    
+    const config = vscode.workspace.getConfiguration('v-enc');
+    const mode = config.get<string>('encryptionMode') || 'password';
+    
+    if (mode === 'sshKey') {
+        if (cachedPrivateKey) {
+            statusBarItem.text = `$(unlock) V.enc: SSH Active`;
+            statusBarItem.tooltip = "Click to unload SSH private key (lock workspace)";
+        } else {
+            statusBarItem.text = `$(lock) V.enc: SSH Locked`;
+            statusBarItem.tooltip = "Click to load/unlock SSH private key";
+        }
+        return;
+    }
+    
     let activeUri: vscode.Uri | undefined;
     if (vscode.window.activeTextEditor) {
         activeUri = vscode.window.activeTextEditor.document.uri;
@@ -232,13 +261,22 @@ export class VEncFileSystemProvider implements vscode.FileSystemProvider {
             const watcher = vscode.workspace.createFileSystemWatcher(globPattern);
             
             const changeSub = watcher.onDidChange(e => {
-                this._emitter.fire([{ type: vscode.FileChangeType.Changed, uri: e.with({ scheme: 'venc' }) }]);
+                const vencUri = e.with({ scheme: 'venc' });
+                const key = vencUri.toString().toLowerCase();
+                decryptedSizes.delete(key);
+                this._emitter.fire([{ type: vscode.FileChangeType.Changed, uri: vencUri }]);
             });
             const createSub = watcher.onDidCreate(e => {
-                this._emitter.fire([{ type: vscode.FileChangeType.Created, uri: e.with({ scheme: 'venc' }) }]);
+                const vencUri = e.with({ scheme: 'venc' });
+                const key = vencUri.toString().toLowerCase();
+                decryptedSizes.delete(key);
+                this._emitter.fire([{ type: vscode.FileChangeType.Created, uri: vencUri }]);
             });
             const deleteSub = watcher.onDidDelete(e => {
-                this._emitter.fire([{ type: vscode.FileChangeType.Deleted, uri: e.with({ scheme: 'venc' }) }]);
+                const vencUri = e.with({ scheme: 'venc' });
+                const key = vencUri.toString().toLowerCase();
+                decryptedSizes.delete(key);
+                this._emitter.fire([{ type: vscode.FileChangeType.Deleted, uri: vencUri }]);
             });
             
             return new vscode.Disposable(() => {
@@ -253,9 +291,67 @@ export class VEncFileSystemProvider implements vscode.FileSystemProvider {
         }
     }
 
+    async getDecryptedSize(uri: vscode.Uri, fileUri: vscode.Uri, stat: vscode.FileStat): Promise<number> {
+        const key = uri.toString().toLowerCase();
+        if (decryptedSizes.has(key)) {
+            return decryptedSizes.get(key)!;
+        }
+        
+        if (stat.size === 0) {
+            return 0;
+        }
+        
+        const config = vscode.workspace.getConfiguration('v-enc');
+        const mode = config.get<string>('encryptionMode') || 'password';
+        
+        let canDecrypt = false;
+        if (mode === 'sshKey') {
+            canDecrypt = !!cachedPrivateKey;
+        } else {
+            const dirKey = getDirectoryKey(uri);
+            canDecrypt = passwordMap.has(dirKey);
+        }
+        
+        if (canDecrypt) {
+            try {
+                const content = await vscode.workspace.fs.readFile(fileUri);
+                const isSsh = content.length >= MAGIC_SSH.length && Buffer.from(content).subarray(0, MAGIC_SSH.length).equals(MAGIC_SSH);
+                const isPwd = content.length >= MAGIC.length && Buffer.from(content).subarray(0, MAGIC.length).equals(MAGIC);
+                
+                if (!isSsh && !isPwd) {
+                    decryptedSizes.set(key, content.length);
+                    return content.length;
+                }
+                
+                if (isSsh && mode === 'sshKey' && cachedPrivateKey) {
+                    const decrypted = decryptSsh(Buffer.from(content), cachedPrivateKey);
+                    decryptedSizes.set(key, decrypted.length);
+                    return decrypted.length;
+                } else if (isPwd && mode === 'password') {
+                    const dirKey = getDirectoryKey(uri);
+                    const password = passwordMap.get(dirKey);
+                    if (password) {
+                        const decrypted = decrypt(Buffer.from(content), password);
+                        decryptedSizes.set(key, decrypted.length);
+                        return decrypted.length;
+                    }
+                }
+            } catch (err) {
+                // Ignore decryption errors for stat
+            }
+        }
+        
+        return stat.size;
+    }
+
     async stat(uri: vscode.Uri): Promise<vscode.FileStat> {
         const fileUri = uri.with({ scheme: 'file' });
         const stat = await vscode.workspace.fs.stat(fileUri);
+        
+        let size = stat.size;
+        if (uri.path.toLowerCase().endsWith('.venc')) {
+            size = await this.getDecryptedSize(uri, fileUri, stat);
+        }
         
         const key = uri.toString().toLowerCase();
         if (virtualMtimes.has(key)) {
@@ -263,11 +359,15 @@ export class VEncFileSystemProvider implements vscode.FileSystemProvider {
             console.log(`[V.enc] stat(${uri.toString()}): Overriding physical mtime ${stat.mtime} with virtual mtime ${virtualMtime}`);
             return {
                 ...stat,
+                size,
                 mtime: virtualMtime
             };
         }
         
-        return stat;
+        return {
+            ...stat,
+            size
+        };
     }
 
     async readDirectory(uri: vscode.Uri): Promise<[string, vscode.FileType][]> {
@@ -303,6 +403,7 @@ export class VEncFileSystemProvider implements vscode.FileSystemProvider {
         console.log(`[V.enc] readFile(${uri.toString()}): Magic check -> isSsh: ${isSsh}, isPwd: ${isPwd}`);
         if (!isSsh && !isPwd) {
             console.log(`[V.enc] readFile(${uri.toString()}): Missing both VENC and VESH magic headers, treating as unencrypted plaintext`);
+            decryptedSizes.set(uri.toString().toLowerCase(), content.length);
             return content;
         }
 
@@ -318,7 +419,9 @@ export class VEncFileSystemProvider implements vscode.FileSystemProvider {
                 console.log(`[V.enc] readFile(${uri.toString()}): Decrypting with SSH private key`);
                 const plaintextStr = decryptSsh(Buffer.from(content), privateKeyObj);
                 console.log(`[V.enc] readFile(${uri.toString()}): Decryption succeeded! Length -> ${plaintextStr.length}`);
-                return Buffer.from(plaintextStr, 'utf8');
+                const plaintextBuf = Buffer.from(plaintextStr, 'utf8');
+                decryptedSizes.set(uri.toString().toLowerCase(), plaintextBuf.length);
+                return plaintextBuf;
             } catch (err: any) {
                 console.error(`[V.enc] readFile(${uri.toString()}): SSH decryption failed: ${err.message}`);
                 const choice = await vscode.window.showErrorMessage(
@@ -330,6 +433,7 @@ export class VEncFileSystemProvider implements vscode.FileSystemProvider {
                     cachedPrivateKey = undefined; // clear cache to force passphrase re-entry
                     return this.readFile(uri);
                 } else if (choice === 'Open as raw ciphertext') {
+                    decryptedSizes.set(uri.toString().toLowerCase(), content.length);
                     return content;
                 }
                 throw new Error('Decryption failed.');
@@ -346,7 +450,9 @@ export class VEncFileSystemProvider implements vscode.FileSystemProvider {
                 console.log(`[V.enc] readFile(${uri.toString()}): Decrypting with password -> ${password}`);
                 const plaintextStr = decrypt(Buffer.from(content), password);
                 console.log(`[V.enc] readFile(${uri.toString()}): Decryption succeeded! Length -> ${plaintextStr.length}`);
-                return Buffer.from(plaintextStr, 'utf8');
+                const plaintextBuf = Buffer.from(plaintextStr, 'utf8');
+                decryptedSizes.set(uri.toString().toLowerCase(), plaintextBuf.length);
+                return plaintextBuf;
             } catch (err: any) {
                 console.error(`[V.enc] readFile(${uri.toString()}): Password decryption failed: ${err.message}`);
                 const choice = await vscode.window.showErrorMessage(
@@ -359,6 +465,7 @@ export class VEncFileSystemProvider implements vscode.FileSystemProvider {
                     passwordMap.delete(key);
                     return this.readFile(uri);
                 } else if (choice === 'Open as raw ciphertext') {
+                    decryptedSizes.set(uri.toString().toLowerCase(), content.length);
                     return content;
                 }
                 throw new Error('Decryption failed.');
@@ -410,18 +517,35 @@ export class VEncFileSystemProvider implements vscode.FileSystemProvider {
         // Clear virtual mtime so stat returns the real disk state
         const key = uri.toString().toLowerCase();
         virtualMtimes.delete(key);
+        decryptedSizes.set(key, content.length);
         
         await vscode.workspace.fs.writeFile(fileUri, encryptedBuffer);
     }
 
     async delete(uri: vscode.Uri, options: { recursive: boolean }): Promise<void> {
         const fileUri = uri.with({ scheme: 'file' });
+        const key = uri.toString().toLowerCase();
+        decryptedSizes.delete(key);
+        virtualMtimes.delete(key);
         await vscode.workspace.fs.delete(fileUri, options);
     }
 
     async rename(oldUri: vscode.Uri, newUri: vscode.Uri, options: { overwrite: boolean }): Promise<void> {
         const oldFileUri = oldUri.with({ scheme: 'file' });
         const newFileUri = newUri.with({ scheme: 'file' });
+        
+        const oldKey = oldUri.toString().toLowerCase();
+        const newKey = newUri.toString().toLowerCase();
+        
+        if (decryptedSizes.has(oldKey)) {
+            decryptedSizes.set(newKey, decryptedSizes.get(oldKey)!);
+            decryptedSizes.delete(oldKey);
+        }
+        if (virtualMtimes.has(oldKey)) {
+            virtualMtimes.set(newKey, virtualMtimes.get(oldKey)!);
+            virtualMtimes.delete(oldKey);
+        }
+        
         await vscode.workspace.fs.rename(oldFileUri, newFileUri, options);
     }
 }
@@ -442,10 +566,7 @@ async function redirectIfNeeded(editor: vscode.TextEditor | undefined) {
             
             // Open the venc:// editor
             const vencUri = uri.with({ scheme: 'venc' });
-            const doc = await vscode.workspace.openTextDocument(vencUri);
-            await vscode.window.showTextDocument(doc, {
-                preview: false
-            });
+            await vscode.commands.executeCommand('vscode.openWith', vencUri, 'default');
         } catch (err: any) {
             vscode.window.showErrorMessage(`Failed to open secure editor: ${err.message || err}`);
         } finally {
@@ -472,14 +593,37 @@ async function encryptAndRedirectOnSave(document: vscode.TextDocument) {
             await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
             
             // Open the venc:// editor
-            const doc = await vscode.workspace.openTextDocument(vencUri);
-            await vscode.window.showTextDocument(doc, {
-                preview: false
-            });
+            await vscode.commands.executeCommand('vscode.openWith', vencUri, 'default');
         } catch (err: any) {
             vscode.window.showErrorMessage(`Failed to secure V.enc file: ${err.message || err}`);
         } finally {
             isRedirecting = false;
+        }
+    }
+}
+
+class VEncRedirectEditorProvider implements vscode.CustomReadonlyEditorProvider {
+    openCustomDocument(uri: vscode.Uri, openContext: vscode.CustomDocumentOpenContext, token: vscode.CancellationToken): vscode.CustomDocument {
+        return {
+            uri,
+            dispose: () => {}
+        };
+    }
+
+    async resolveCustomEditor(document: vscode.CustomDocument, webviewPanel: vscode.WebviewPanel, token: vscode.CancellationToken): Promise<void> {
+        // Set dummy HTML content to satisfy VS Code webview initialization
+        webviewPanel.webview.html = `<!DOCTYPE html><html><body>Redirecting...</body></html>`;
+        
+        const vencUri = document.uri.with({ scheme: 'venc' });
+        try {
+            await vscode.commands.executeCommand('vscode.openWith', vencUri, 'default');
+        } catch (err: any) {
+            vscode.window.showErrorMessage(`Failed to open secure editor: ${err.message || err}`);
+        } finally {
+            // Defer disposal to the next tick / 100ms to allow webview layout to stabilize first
+            setTimeout(() => {
+                webviewPanel.dispose();
+            }, 100);
         }
     }
 }
@@ -494,6 +638,14 @@ export function activate(context: vscode.ExtensionContext) {
             isCaseSensitive: true,
             isReadonly: false
         })
+    );
+
+    // Register CustomEditorProvider for redirecting file:// opens
+    context.subscriptions.push(
+        vscode.window.registerCustomEditorProvider(
+            'v-enc.redirectEditor',
+            new VEncRedirectEditorProvider()
+        )
     );
 
     // Register Commands
@@ -538,6 +690,34 @@ export function activate(context: vscode.ExtensionContext) {
             
             // Force VS Code to reload open files to apply the new password (clearing cache)
             await reloadWorkspaceVEncFiles();
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('v-enc.statusBarAction', async () => {
+            const config = vscode.workspace.getConfiguration('v-enc');
+            const mode = config.get<string>('encryptionMode') || 'password';
+            
+            if (mode === 'sshKey') {
+                if (cachedPrivateKey) {
+                    cachedPrivateKey = undefined;
+                    vscode.window.showInformationMessage("SSH private key unloaded (Workspace locked).");
+                } else {
+                    const privateKeyPath = config.get<string>('sshPrivateKeyPath') || '~/.ssh/id_rsa';
+                    try {
+                        const key = await getPrivateKey(privateKeyPath);
+                        if (key) {
+                            vscode.window.showInformationMessage("SSH private key loaded (Workspace unlocked).");
+                        }
+                    } catch (err: any) {
+                        vscode.window.showErrorMessage(`Failed to load SSH private key: ${err.message}`);
+                    }
+                }
+                updateStatusBar();
+                await reloadWorkspaceVEncFiles();
+            } else {
+                await vscode.commands.executeCommand('v-enc.setPassword');
+            }
         })
     );
 
@@ -693,7 +873,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Create Status Bar Item
     statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-    statusBarItem.command = 'v-enc.setPassword';
+    statusBarItem.command = 'v-enc.statusBarAction';
     context.subscriptions.push(statusBarItem);
     statusBarItem.show();
 
@@ -725,6 +905,24 @@ export function activate(context: vscode.ExtensionContext) {
             updateStatusBar();
         })
     );
+
+    // Attempt silent SSH private key load on startup if mode is sshKey
+    const config = vscode.workspace.getConfiguration('v-enc');
+    const mode = config.get<string>('encryptionMode') || 'password';
+    if (mode === 'sshKey') {
+        const privateKeyPath = config.get<string>('sshPrivateKeyPath') || '~/.ssh/id_rsa';
+        const expandedPath = expandHomeDir(privateKeyPath);
+        if (fs.existsSync(expandedPath)) {
+            const privateKeyPem = fs.readFileSync(expandedPath, 'utf8');
+            try {
+                const key = crypto.createPrivateKey(privateKeyPem);
+                cachedPrivateKey = key;
+                console.log(`[V.enc] Silent SSH private key load on startup succeeded.`);
+            } catch (err) {
+                console.log(`[V.enc] Silent SSH private key load on startup skipped (requires passphrase or invalid key).`);
+            }
+        }
+    }
 
     // Initial runs
     if (vscode.window.activeTextEditor) {

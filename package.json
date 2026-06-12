@@ -2,7 +2,7 @@
   "name": "v-enc",
   "displayName": "V.enc",
   "description": "",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "engines": {
     "vscode": "^1.120.0"
   },
@@ -91,6 +91,23 @@
           "default": "~/.ssh/id_rsa",
           "description": "Path to the SSH private key (used for decrypting). The tilde symbol '~' will automatically expand to your home directory (e.g., 'C:\\Users\\<Username>\\.ssh\\id_rsa' on Windows or '/home/<username>/.ssh/id_rsa' on Linux/macOS)."
         }
+      }
+    },
+    "customEditors": [
+      {
+        "viewType": "v-enc.redirectEditor",
+        "displayName": "V.enc Secure Editor Redirector",
+        "selector": [
+          {
+            "filenamePattern": "*.venc"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
+    "configurationDefaults": {
+      "workbench.editorAssociations": {
+        "*.venc": "v-enc.redirectEditor"
       }
     }
   },
